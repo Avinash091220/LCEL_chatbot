@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import chains  # noqa: E402
 from chains import (  # noqa: E402
-    SAMPLE_TICKETS, build_bot, build_full_chain, decide_route, detect_safety_concern,
+    SAMPLE_TICKETS, build_bot, build_enrichment_pipeline, build_full_chain, decide_route, detect_safety_concern,
     enrich_with_order_id, explain_route, extract_order_id, extract_order_value,
     parse_triage, quick_filter,
 )
@@ -104,6 +104,15 @@ def test_session9_primitives():
     assert quick_filter.invoke("hello") == "needs_llm_classification"
     out = enrich_with_order_id.invoke({"ticket_text": "Order HS88213", "customer_name": "Ananya"})
     assert out["customer_name"] == "Ananya" and out["order_id"] == "HS88213"
+
+
+def test_enrichment_pipeline_keeps_keys():
+    out = build_enrichment_pipeline(make_llm("genuine_defect,High")).invoke(
+        {"input": "Order #HS88213 for ₹7,200: the sole is peeling"})
+    assert out["input"].startswith("Order #HS88213")  # .assign() keeps the original key
+    assert out["triage"] == {"category": "genuine_defect", "priority": "High"}
+    assert out["safety"]["flag"] is False
+    assert out["order_value"] == 7200 and out["order_id"] == "HS88213"
 
 
 # ------------------------------------------------------------------ decide_route

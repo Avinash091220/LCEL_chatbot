@@ -1,5 +1,4 @@
 """Hopscotch Support (Session 3) - LCEL pipeline with RunnableParallel + RunnableBranch."""
-import html
 import inspect
 import os
 import time
@@ -7,16 +6,15 @@ import uuid
 
 import pandas as pd
 import streamlit as st
-from langchain_core.prompts import MessagesPlaceholder
 
 import chains
 from chains import (
-    SAMPLE_EXPECTED, SAMPLE_TICKETS, build_bot, build_full_chain, build_greeting_chains,
-    build_route_branch, build_signals, decide_route, enrich_with_order_id, explain_route,
+    SAMPLE_EXPECTED, SAMPLE_TICKETS, build_bot, build_enrichment_pipeline, build_full_chain,
+    build_greeting_chains, build_route_branch, build_signals, decide_route, enrich_with_order_id, explain_route,
     quick_filter,
 )
-from llm import AVAILABLE_MODELS, DEFAULT_MODEL, get_llm
-from prompts import PROMPT_CATALOG
+from llm import DEFAULT_MODEL, get_llm
+from prompts import DEFECT_PROMPT, ESCALATION_PROMPT, GENERAL_PROMPT, POLICY_REPLY_PROMPT
 
 st.set_page_config(page_title="Hopscotch Support (Session 3)", page_icon="🧵", layout="wide")
 
@@ -40,9 +38,9 @@ def get_store() -> dict:
 
 
 @st.cache_resource
-def get_bot(model_id: str):
-    """One bot per model; get_session_history reads the shared store."""
-    return build_bot(get_llm(model_id))
+def get_bot():
+    """One bot for the whole app; get_session_history reads the shared store."""
+    return build_bot(get_llm())
 
 
 store = get_store()
@@ -50,9 +48,7 @@ store = get_store()
 # ------------------------------------------------------------------ sidebar
 with st.sidebar:
     st.header("🧵 Hopscotch")
-    model_label = st.selectbox("Model", list(AVAILABLE_MODELS),
-                               index=list(AVAILABLE_MODELS.values()).index(DEFAULT_MODEL))
-    model_id = AVAILABLE_MODELS[model_label]
+    st.caption(f"Model: {DEFAULT_MODEL}")
     if "session_id" not in st.session_state:
         st.session_state.session_id = uuid.uuid4().hex[:8]
     st.caption(f"Session id: `{st.session_state.session_id}`")
@@ -64,7 +60,7 @@ with st.sidebar:
 
 sid = st.session_state.session_id
 try:
-    llm = get_llm(model_id)
+    llm = get_llm()
 except Exception as e:
     st.error(f"Could not create the model client: {e}")
     st.stop()
@@ -88,8 +84,7 @@ def render_debug(info: dict):
         ]))
 
 
-tab_chat, tab_pipe, tab_lab, tab_prompts = st.tabs(
-    ["💬 Chat", "🔗 Pipeline", "🧪 Runnables lab", "🧩 Prompt Templates"])
+tab_chat, tab_pipe, tab_lab = st.tabs(["💬 Chat", "🔗 Pipeline", "🧪 Runnables lab"])
 
 # ------------------------------------------------------------------ tab 1: chat
 with tab_chat:
@@ -111,7 +106,7 @@ with tab_chat:
         with st.chat_message("assistant"):
             try:
                 t0 = time.perf_counter()
-                bot = get_bot(model_id)
+                bot = get_bot()
                 # .stream() yields string chunks; RunnableWithMessageHistory saves the
                 # complete reply to the store once the stream finishes.
                 st.write_stream(bot.stream({"input": msg}, config={"configurable": {"session_id": sid}}))
@@ -158,6 +153,13 @@ with tab_pipe:
             st.code(build_full_chain(llm).get_graph().draw_ascii(), language="text")
         except Exception as e:  # noqa: BLE001
             st.info(f"Could not draw the graph: {e}")
+
+    with st.expander("Branch prompts: the system prompt each RunnableBranch route uses"):
+        for route, branch_prompt in [("human_review", ESCALATION_PROMPT), ("defect", DEFECT_PROMPT),
+                                     ("policy", POLICY_REPLY_PROMPT), ("general (default)", GENERAL_PROMPT)]:
+            st.markdown(f"**{route}**")
+            # messages[0] is the system message; {policy} is filled in by .partial(), so show the rules only
+            st.code(branch_prompt.messages[0].prompt.template.split("\n\n--- POLICY ---")[0], language="text")
 
     st.markdown("### Run step-by-step")
     key = st.selectbox("Sample ticket", list(SAMPLE_TICKETS), key="pipe_sample")
@@ -237,67 +239,30 @@ with tab_lab:
         except Exception as e:  # noqa: BLE001
             st.error(str(e))
 
-    st.markdown("#### (f) Imperative (Session 2) vs Declarative (LCEL)")
-    i1, i2 = st.columns(2)
-    i1.markdown("**Session 2 - imperative**")
-    i1.code('''def run_triage_chain(ticket_text):
-    category = classification_chain.invoke({"ticket_text": ticket_text})
-    details  = extraction_chain.invoke({"ticket_text": ticket_text})
-    priority = priority_chain.invoke(...)
-    draft    = draft_chain.invoke(...)
-    return {"category": category, ...}
-# 4 sequential calls, a plain function:
-# no .batch(), no .stream(), no routing.''', language="python")
-    i2.markdown("**Session 3 - declarative LCEL**")
-    i2.code('''full_chain = (
-    RunnablePassthrough.assign(signals=text | RunnableParallel(...))
-    | RunnableLambda(decide_route)
-    | RunnableBranch(...)
+    st.markdown("#### (f) `.assign().assign()` vs `RunnableParallel`")
+    st.code("""# sequential: each .assign() waits for the previous one
+build_enrichment_pipeline = (
+    RunnablePassthrough.assign(triage=text | triage_subchain)   # LLM call first...
+    .assign(safety=...).assign(order_value=...).assign(order_id=...)  # ...then the cheap checks
 )
-# One Runnable: .invoke() .batch() .stream(),
-# concurrent signals, declarative routing.''', language="python")
-
-# ------------------------------------------------------------------ tab 4: prompts
-st.markdown("""
-<style>
-.pt-card{border-radius:10px;padding:.7rem .9rem;margin:.5rem 0;border:1px solid rgba(128,128,128,.35);color:inherit;}
-.pt-system{background:rgba(124,106,230,.14);border-left:5px solid #7c6ae6;}
-.pt-human{background:rgba(31,168,154,.14);border-left:5px solid #1fa89a;}
-.pt-ph{background:rgba(128,128,128,.08);border:2px dashed rgba(128,128,128,.6);}
-.pt-role{font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;opacity:.8;}
-.pt-body{white-space:pre-wrap;font-size:.9rem;margin-top:.3rem;}
-.pt-pill{display:inline-block;padding:0 .5rem;border-radius:999px;background:rgba(240,160,40,.25);
- border:1px solid rgba(240,160,40,.7);font-family:monospace;font-size:.82rem;margin:0 .1rem;}
-.pt-chip{display:inline-block;padding:.1rem .6rem;border-radius:999px;background:rgba(128,128,128,.18);
- font-family:monospace;font-size:.82rem;margin:.1rem;}
-</style>""", unsafe_allow_html=True)
-
-
-def _pillify(text: str, variables) -> str:
-    """HTML-escape the template, then turn {variable} into pill chips."""
-    out = html.escape(text)
-    for v in variables:
-        out = out.replace("{" + v + "}", f'<span class="pt-pill">{{{v}}}</span>')
-    return out
-
-
-with tab_prompts:
-    st.subheader("Prompt templates")
-    name = st.selectbox("Prompt", list(PROMPT_CATALOG))
-    entry = PROMPT_CATALOG[name]
-    prompt = entry["prompt"]
-    st.markdown(f"**{entry['description']}**  \n*Used in:* {entry['used_in']}")
-    chips = lambda items: " ".join(f'<span class="pt-chip">{{{html.escape(i)}}}</span>' for i in items) or "-"  # noqa: E731
-    st.markdown(f"Input variables: {chips(prompt.input_variables)}<br>"
-                f"Partial variables: {chips(prompt.partial_variables)}", unsafe_allow_html=True)
-    for m in prompt.messages:
-        if isinstance(m, MessagesPlaceholder):
-            st.markdown('<div class="pt-card pt-ph"><span class="pt-role">placeholder</span><br>'
-                        f'📥 {html.escape(m.variable_name)} list inserted here</div>', unsafe_allow_html=True)
-            continue
-        role = "system" if "System" in type(m).__name__ else "human"
-        tmpl = m.prompt.template
-        shown = tmpl  # partial variables (e.g. {policy}) stay as pills instead of dumping the policy text
-        st.markdown(f'<div class="pt-card pt-{role}"><span class="pt-role">{role}</span>'
-                    f'<div class="pt-body">{_pillify(shown, m.prompt.input_variables + list(prompt.partial_variables))}'
-                    "</div></div>", unsafe_allow_html=True)
+# concurrent: all four start together
+build_signals = RunnableParallel(triage=..., safety=..., order_value=..., order_id=...)""", language="python")
+    t_f = st.text_area("Ticket", SAMPLE_TICKETS["Defect: Dino-Print sneakers"], key="lab_f")
+    if st.button("Run both and compare", key="btn_f"):
+        try:
+            t0 = time.perf_counter()
+            seq_out = build_enrichment_pipeline(llm).invoke({"input": t_f})
+            seq_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            par_out = build_signals(llm).invoke(t_f)
+            par_s = time.perf_counter() - t0
+            f1, f2 = st.columns(2)
+            f1.markdown(f"**`.assign()` sequence** - {seq_s:.2f}s")
+            f1.json(seq_out)
+            f2.markdown(f"**`RunnableParallel`** - {par_s:.2f}s")
+            f2.json(par_out)
+            st.caption("Same signals either way. The difference: the assign steps run one at a time, "
+                       "RunnableParallel runs its steps concurrently. Only one step here is a slow LLM "
+                       "call, so the gap is small - with several LLM steps it would be large.")
+        except Exception as e:  # noqa: BLE001
+            st.error(str(e))

@@ -2,8 +2,8 @@
 chains.py - the Session 3 LCEL pipeline for the Hopscotch support bot.
 
 Everything here is a *Runnable*: it has .invoke() / .batch() / .stream() and can be
-piped with `|`.  The big idea compared with Session 2 is that the whole triage-and-reply
-flow is ONE declarative object instead of a Python function calling chains in order.
+piped with `|`.  The big idea is that the whole triage-and-reply flow is ONE declarative object
+instead of a Python function calling chains in order.
 
                       {"input": str, "chat_history": [...]}
                                      |
@@ -48,10 +48,8 @@ from langchain_core.runnables import (
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from prompts import (
-    CLASSIFICATION_PROMPT,
     DEFECT_PROMPT,
     ESCALATION_PROMPT,
-    EXTRACTION_PROMPT,
     GENERAL_PROMPT,
     POLICY_REPLY_PROMPT,
     TRIAGE_PROMPT,
@@ -60,7 +58,7 @@ from prompts import (
 ORDER_VALUE_LIMIT = 5000  # policy Section 4: orders above INR 5,000 need a human
 
 # =========================================================================== #
-# 1. Session 9 primitives: RunnableLambda and RunnablePassthrough.assign
+# 1. Core primitives: RunnableLambda and RunnablePassthrough.assign
 # =========================================================================== #
 
 
@@ -92,19 +90,8 @@ enrich_with_order_id = RunnablePassthrough.assign(order_id=RunnableLambda(extrac
 
 
 # =========================================================================== #
-# 2. Session 2's imperative triage, rewritten declaratively
+# 2. The triage sub-chain (one LLM call, parsed defensively)
 # =========================================================================== #
-
-
-def build_triage_pipeline(llm):
-    """Classify + extract, as ONE Runnable (Session 2's run_triage_chain, in LCEL)."""
-    classification_chain = CLASSIFICATION_PROMPT | llm | StrOutputParser()
-    extraction_chain = EXTRACTION_PROMPT | llm | StrOutputParser()
-    return (
-        RunnablePassthrough.assign(category=classification_chain)
-        .assign(details=extraction_chain)
-    )
-
 
 _CATEGORIES = ("genuine_defect", "policy_violation", "unclear", "other")
 _PRIORITIES = {"high": "High", "medium": "Medium", "low": "Low"}
@@ -187,6 +174,23 @@ def build_signals(llm):
         safety=RunnableLambda(detect_safety_concern),
         order_value=RunnableLambda(extract_order_value),
         order_id=RunnableLambda(extract_order_id),
+    )
+
+
+def build_enrichment_pipeline(llm):
+    """The SEQUENTIAL way to gather the same signals: .assign().assign().assign()...
+
+    Each .assign() keeps every existing key and adds one more, but the steps run one
+    after another - so the LLM triage finishes before the cheap regex checks even start.
+    Compare with build_signals above, where RunnableParallel runs them all at once.
+    Output: {"input": ..., "triage": ..., "safety": ..., "order_value": ..., "order_id": ...}
+    """
+    text = lambda x: x["input"]  # noqa: E731 - each step reads the customer text from the dict
+    return (
+        RunnablePassthrough.assign(triage=text | build_triage_subchain(llm))
+        .assign(safety=lambda x: detect_safety_concern(text(x)))
+        .assign(order_value=lambda x: extract_order_value(text(x)))
+        .assign(order_id=lambda x: extract_order_id(text(x)))
     )
 
 
@@ -274,7 +278,7 @@ def build_full_chain(llm):
     )
 
 
-# --- chat memory (same idea as Session 2) ---------------------------------- #
+# --- chat memory ---------------------------------- #
 store: dict = {}  # session_id -> InMemoryChatMessageHistory
 
 
@@ -312,7 +316,7 @@ def explain_route(text: str, llm) -> dict:
 
 
 def build_greeting_chains(llm):
-    """Session 9 demo: the same chain built with `|` and with explicit RunnableSequence."""
+    """Demo: the same chain built with `|` and with explicit RunnableSequence."""
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You work for Hopscotch, a kids' fashion retailer. Reply in one short, warm sentence."),
         ("human", "{input}"),

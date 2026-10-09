@@ -1,11 +1,9 @@
 """
 prompts.py - every prompt template used by the Hopscotch bot.
 
-Session 2 gave us SUPPORT_PROMPT, CLASSIFICATION_PROMPT and EXTRACTION_PROMPT.
-Session 3 adds TRIAGE_PROMPT (one cheap call -> "category,priority") and FOUR
-branch reply prompts - one per route the pipeline can take. RunnableBranch picks
-which one runs, so the *reply style* is chosen by the pipeline, not by an if/else
-in the app.
+TRIAGE_PROMPT is one cheap call -> "category,priority". Then FOUR branch reply
+prompts - one per route the pipeline can take. RunnableBranch picks which one runs,
+so the *reply style* is chosen by the pipeline, not by an if/else in the app.
 """
 from pathlib import Path
 
@@ -13,39 +11,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # The company policy is plain text; we inject it into system prompts via .partial()
 POLICY = (Path(__file__).parent / "hopscotch_policy.md").read_text(encoding="utf-8")
-
-# --------------------------------------------------------------------------- #
-# Carried over from Session 2
-# --------------------------------------------------------------------------- #
-
-SUPPORT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are a warm, concise customer support assistant for Hopscotch, a premium kids' "
-     "fashion retailer in Mumbai. Answer ONLY using the policy below. If the policy does "
-     "not cover something, say you will check with the team.\n\n"
-     "--- POLICY ---\n{policy}"),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{input}"),
-]).partial(policy=POLICY)
-
-CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "Classify the customer's return/complaint message into exactly one category: "
-     "'policy_violation' (worn/used item, outside the return window, wrong size by mistake), "
-     "'genuine_defect' (manufacturing fault, damaged on arrival, stitching/sole failure), "
-     "or 'other' (delivery, billing, general questions). "
-     "Respond with ONLY the category label, nothing else."),
-    ("human", "{ticket_text}"),
-])
-
-EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "Extract the following fields from the customer message as a compact JSON object: "
-     "customer_name (if mentioned, else null), order_id (if mentioned, else null), "
-     "product (short description), issue (one-sentence summary). "
-     "Respond with ONLY valid JSON, no extra text."),
-    ("human", "{ticket_text}"),
-])
 
 # --------------------------------------------------------------------------- #
 # New in Session 3
@@ -133,49 +98,3 @@ GENERAL_PROMPT = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("chat_history"),
     ("human", _HUMAN_TURN),
 ]).partial(policy=POLICY)
-
-# --------------------------------------------------------------------------- #
-# Catalog (drives the "Prompt Templates" tab)
-# --------------------------------------------------------------------------- #
-PROMPT_CATALOG = {
-    "SUPPORT_PROMPT": {
-        "prompt": SUPPORT_PROMPT,
-        "description": "Session 2's basic policy-grounded support assistant with chat history.",
-        "used_in": "Session 2 chatbot (not in the Session 3 pipeline - shown for comparison)",
-    },
-    "CLASSIFICATION_PROMPT": {
-        "prompt": CLASSIFICATION_PROMPT,
-        "description": "Labels a ticket: policy_violation / genuine_defect / other.",
-        "used_in": "build_triage_pipeline (Runnables lab, Session 2 -> LCEL rewrite)",
-    },
-    "EXTRACTION_PROMPT": {
-        "prompt": EXTRACTION_PROMPT,
-        "description": "Pulls name, order id, product and issue out of a ticket as JSON.",
-        "used_in": "build_triage_pipeline",
-    },
-    "TRIAGE_PROMPT": {
-        "prompt": TRIAGE_PROMPT,
-        "description": "One cheap call returning 'category,priority'. 'unclear' triggers human review.",
-        "used_in": "build_signals -> triage branch of the RunnableParallel",
-    },
-    "ESCALATION_PROMPT": {
-        "prompt": ESCALATION_PROMPT,
-        "description": "Warm hand-off to a human agent; no promised outcome; safety advice.",
-        "used_in": "build_route_branch -> human_review route",
-    },
-    "DEFECT_PROMPT": {
-        "prompt": DEFECT_PROMPT,
-        "description": "Apology + 90-day defect cover + request for photo evidence.",
-        "used_in": "build_route_branch -> defect route",
-    },
-    "POLICY_REPLY_PROMPT": {
-        "prompt": POLICY_REPLY_PROMPT,
-        "description": "Kindly explains the 30-day / unworn rule or why it is not covered.",
-        "used_in": "build_route_branch -> policy route",
-    },
-    "GENERAL_PROMPT": {
-        "prompt": GENERAL_PROMPT,
-        "description": "Default: answer the question or ask one clarifying question.",
-        "used_in": "build_route_branch -> default (general) route",
-    },
-}
