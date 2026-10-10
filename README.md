@@ -1,12 +1,6 @@
 # Hopscotch Support Bot - Session 3: LCEL, RunnableParallel and RunnableBranch
 
-| Session | Repo | Topic |
-|---|---|---|
-| 1 | [hopscotch-s1-openai-chatbot](https://github.com/niti007/hopscotch-s1-openai-chatbot) | Raw `openai` SDK + Streamlit, list-of-dicts history |
-| 2 | [hopscotch-s2-langchain-chatbot](https://github.com/niti007/hopscotch-s2-langchain-chatbot) | LangChain: prompts, chains, memory, imperative triage |
-| **3** | **[hopscotch-s3-lcel-chatbot](https://github.com/niti007/hopscotch-s3-lcel-chatbot) (you are here)** | **Runnables, LCEL, Parallel, Branch, streaming** |
 
-Previously: [Session 2](https://github.com/niti007/hopscotch-s2-langchain-chatbot).
 
 ## Concepts
 
